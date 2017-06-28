@@ -6,6 +6,7 @@ import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothGatt;
 import android.bluetooth.BluetoothGattCallback;
 import android.bluetooth.BluetoothGattCharacteristic;
+import android.bluetooth.BluetoothGattDescriptor;
 import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothProfile;
@@ -38,6 +39,9 @@ import org.w3c.dom.Text;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.UUID;
+
+import static android.R.attr.value;
 
 public class MainActivity extends Activity implements View.OnClickListener, AdapterView.OnItemClickListener {
 
@@ -45,6 +49,9 @@ public class MainActivity extends Activity implements View.OnClickListener, Adap
     private boolean bMocking;
     private Button btnStartScan;
     private Button btnStopScan;
+    private Button btnSetAlarm;
+    private Button btnClearAlarm;
+    private Button btnGetAlarm;
     private BluetoothAdapter btAdapter;
     private BluetoothManager btManager;
     private BluetoothLeScanner btScanner;
@@ -55,12 +62,21 @@ public class MainActivity extends Activity implements View.OnClickListener, Adap
     private ListView listView;
     private Context appContext;
     private int REQUEST_ENABLE_BT;
+    private BluetoothGattService mAlarmService;
+    private BluetoothGattCharacteristic mAlarmChar;
+    private BluetoothGattDescriptor mAlarmWriteDescriptor;
+    private BluetoothGattDescriptor mAlarmReadDescriptor;
+    private static final String TAG = "BLE_CENTRAL";
+
+    private static final UUID alarmUUid = UUID.fromString("FF890198-9446-4E3A-B173-4E1161D6F59B");
+    private static final UUID charUUid = UUID.fromString("77B4350C-DEA3-4DBA-B650-251670F4B2B4");
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         System.out.print("oncreate");
+        Log.v(TAG, "onCreate");
         bMocking = false;
         mock = new MockData();
         appContext = this;
@@ -69,9 +85,15 @@ public class MainActivity extends Activity implements View.OnClickListener, Adap
 
         btnStartScan = (Button) findViewById(R.id.btnStartScan);
         btnStopScan = (Button) findViewById(R.id.btnStopScan);
+        btnSetAlarm = (Button) findViewById(R.id.btnSetAlarm);
+        btnClearAlarm = (Button) findViewById(R.id.btnClearAlarm);
+        btnGetAlarm = (Button) findViewById(R.id.btnGetAlarm);
 
         btnStartScan.setOnClickListener(this);
         btnStopScan.setOnClickListener(this);
+        btnSetAlarm.setOnClickListener(this);
+        btnClearAlarm.setOnClickListener(this);
+        btnGetAlarm.setOnClickListener(this);
 
         filters = new ArrayList<ScanFilter>();
         deviceList = new ArrayList<BluetoothDevice>();
@@ -116,6 +138,18 @@ public class MainActivity extends Activity implements View.OnClickListener, Adap
                 Log.d("StopScan", "buttonClicked");
                 scanForDevices(false);
                 break;
+            case R.id.btnSetAlarm:
+                Log.d("SetAlarm", "buttonClicked");
+                setAlarm(true);
+                break;
+            case R.id.btnClearAlarm:
+                Log.d("ClearAlarm", "buttonClicked");
+                setAlarm(false);
+                break;
+            case R.id.btnGetAlarm:
+                Log.d("ClearAlarm", "buttonClicked");
+                getAlarm();
+                break;
             default:
         }
     }
@@ -132,8 +166,10 @@ public class MainActivity extends Activity implements View.OnClickListener, Adap
             startActivity(intent);
         } else {
             BluetoothDevice selectedDevice = deviceList.get(position);
-            gatt = selectedDevice.connectGatt(MainActivity.this, true, gattCallback);
-            if(gatt.getDevice() == selectedDevice) {
+            gatt = selectedDevice.connectGatt(MainActivity.this, false, gattCallback);
+            Log.i(TAG, "connecting to gatt");
+           /* if(gatt.getDevice() == selectedDevice) {
+
                     List<BluetoothGattService> services = new ArrayList<BluetoothGattService>();
                     List<BluetoothGattCharacteristic> chars = new ArrayList<BluetoothGattCharacteristic>();
 
@@ -148,22 +184,23 @@ public class MainActivity extends Activity implements View.OnClickListener, Adap
 
                     if(services != null && services.size() > 0) {
                         intent.putExtra("service", services.get(0).getUuid().toString());
+                        Log.v(TAG, "Service found");
                     }
 
                     if(chars != null && chars.size() > 0) {
                         if(chars.get(0).getValue() != null) {
                             intent.putExtra("characteristics", chars.get(0).getValue().toString());
                         }
+                        Log.v(TAG, "Characteristic found");
                     }
 
                     startActivity(intent);
-                }
+                }*/
             }
         }
-    
 
     private void scanForDevices(final boolean enable) {
-        Log.d("ScanForDevices", "enter");
+        Log.v("ScanForDevices", "enter");
         btScanner = btAdapter.getBluetoothLeScanner();
         settings = new ScanSettings.Builder()
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
@@ -219,6 +256,8 @@ public class MainActivity extends Activity implements View.OnClickListener, Adap
         public void onScanFailed(int errorCode) {
             Log.e("Scan Failed", "Error Code: " + errorCode);
         }
+
+
     };
 
     private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
@@ -228,6 +267,7 @@ public class MainActivity extends Activity implements View.OnClickListener, Adap
             switch(newState) {
                 case BluetoothProfile.STATE_CONNECTED:
                     Log.i("gattCallback", "STATE_CONNECTED");
+                    btAdapter.getBluetoothLeScanner().stopScan(scanCallback);
                     gatt.discoverServices();
                     break;
                 case BluetoothProfile.STATE_DISCONNECTED:
@@ -241,8 +281,18 @@ public class MainActivity extends Activity implements View.OnClickListener, Adap
         @Override
         public void onServicesDiscovered(BluetoothGatt gatt, int status) {
             if(status == BluetoothGatt.GATT_SUCCESS) {
-                Log.i("Service discovered", gatt.getServices().toString());
+                //String value = "TEST_NEW_VALUE";
+
                 List<BluetoothGattService> services = gatt.getServices();
+                mAlarmService = gatt.getService(alarmUUid);
+                mAlarmChar = mAlarmService.getCharacteristic(charUUid);
+
+                Log.i(TAG, "alarmCharacteristic Value: " + mAlarmChar.getValue());
+                Log.i("Service discovered", gatt.getServices().toString());
+
+
+                // See Whatsapp
+                // Write via GattDescriptor
             }
         }
 
@@ -251,5 +301,31 @@ public class MainActivity extends Activity implements View.OnClickListener, Adap
             Log.i("onCharacteristicRead", characteristic.getValue().toString());
         }
     };
+
+    public void setAlarm(boolean b) {
+        byte[] value = new byte[4];
+
+        if(b) {
+            value[0] = (byte) (01 & 0xFF);
+        } else {
+            value[0] = (byte) (00 & 0xFF);
+        }
+
+        mAlarmChar.setValue(value);
+        boolean stat = gatt.writeCharacteristic(mAlarmChar);
+
+        if(stat) {
+            Log.i("WriteCharStatus", "true");
+        } else {
+            Log.i("WriteCharStatus", "false");
+        }
+    }
+
+    public void getAlarm() {
+
+        byte[] value = mAlarmChar.getValue();
+        Log.i("getAlarm(): ", "value" + value.toString());
+        Toast.makeText(this, "getAlarm Value" + value.toString(), Toast.LENGTH_LONG).show();
+    }
 
 }
