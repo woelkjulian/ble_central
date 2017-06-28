@@ -45,8 +45,7 @@ import static android.R.attr.value;
 
 public class MainActivity extends Activity implements View.OnClickListener, AdapterView.OnItemClickListener {
 
-    private MockData mock;
-    private boolean bMocking;
+
     private Button btnStartScan;
     private Button btnStopScan;
     private Button btnSetAlarm;
@@ -77,8 +76,6 @@ public class MainActivity extends Activity implements View.OnClickListener, Adap
         setContentView(R.layout.activity_main);
         System.out.print("oncreate");
         Log.v(TAG, "onCreate");
-        bMocking = false;
-        mock = new MockData();
         appContext = this;
         listView = (ListView) findViewById(R.id.deviceList);
         listView.setOnItemClickListener(this);
@@ -159,45 +156,11 @@ public class MainActivity extends Activity implements View.OnClickListener, Adap
     public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
         Log.i("OnItemClick", "item clicked");
 
-        if(bMocking) {
-            Intent intent = new Intent(this, GattActivity.class);
-            intent.putExtra("service", mock.getServices().get(position));
-            intent.putExtra("characteristic", mock.getCharacteristics().get(position));
-            startActivity(intent);
-        } else {
-            BluetoothDevice selectedDevice = deviceList.get(position);
-            gatt = selectedDevice.connectGatt(MainActivity.this, false, gattCallback);
-            Log.i(TAG, "connecting to gatt");
-           /* if(gatt.getDevice() == selectedDevice) {
+        BluetoothDevice selectedDevice = deviceList.get(position);
+        gatt = selectedDevice.connectGatt(MainActivity.this, false, gattCallback);
+        Log.i(TAG, "connecting to gatt");
+    }
 
-                    List<BluetoothGattService> services = new ArrayList<BluetoothGattService>();
-                    List<BluetoothGattCharacteristic> chars = new ArrayList<BluetoothGattCharacteristic>();
-
-                    for(BluetoothGattService s : gatt.getServices()) {
-                        services.add(s);
-                        for(BluetoothGattCharacteristic c : s.getCharacteristics()){
-                            chars.add(c);
-                        }
-                    }
-
-                    Intent intent = new Intent(this, GattActivity.class);
-
-                    if(services != null && services.size() > 0) {
-                        intent.putExtra("service", services.get(0).getUuid().toString());
-                        Log.v(TAG, "Service found");
-                    }
-
-                    if(chars != null && chars.size() > 0) {
-                        if(chars.get(0).getValue() != null) {
-                            intent.putExtra("characteristics", chars.get(0).getValue().toString());
-                        }
-                        Log.v(TAG, "Characteristic found");
-                    }
-
-                    startActivity(intent);
-                }*/
-            }
-        }
 
     private void scanForDevices(final boolean enable) {
         Log.v("ScanForDevices", "enter");
@@ -211,23 +174,12 @@ public class MainActivity extends Activity implements View.OnClickListener, Adap
                     .build());
 
         if(enable) {
-            if(bMocking) {
-                dataMocking();
-            }
             btScanner.startScan(filters, settings, scanCallback);
         } else {
             btScanner.stopScan(scanCallback);
         }
     }
-
-    private void dataMocking() {
-        ArrayAdapter<String> adapter = new ArrayAdapter<String>(
-                appContext,
-                android.R.layout.simple_list_item_1,
-                mock.getDevices());
-        listView.setAdapter(adapter);
-    }
-
+    
     private ScanCallback scanCallback = new ScanCallback() {
 
         @Override
@@ -325,7 +277,7 @@ public class MainActivity extends Activity implements View.OnClickListener, Adap
 
         byte[] value = mAlarmChar.getValue();
         Log.i("getAlarm(): ", "value" + value.toString());
-        Toast.makeText(this, "getAlarm Value" + value.toString(), Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "getAlarm Value" + value, Toast.LENGTH_LONG).show();
     }
 
 }
