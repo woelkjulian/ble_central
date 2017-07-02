@@ -15,10 +15,18 @@ import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanFilter;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.le.ScanSettings;
+import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
+import android.content.res.AssetManager;
+import android.media.AudioManager;
+import android.media.SoundPool;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.ParcelUuid;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
@@ -36,6 +44,7 @@ import android.widget.Toast;
 
 import org.w3c.dom.Text;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -45,30 +54,116 @@ import static android.R.attr.value;
 
 public class MainActivity extends Activity implements View.OnClickListener, AdapterView.OnItemClickListener {
 
-
-    private Button btnStartScan;
-    private Button btnStopScan;
-    private Button btnSetAlarm;
-    private Button btnClearAlarm;
-    private Button btnGetAlarm;
-    private BluetoothAdapter btAdapter;
-    private BluetoothManager btManager;
-    private BluetoothLeScanner btScanner;
-    private ScanSettings settings;
-    private List<ScanFilter> filters;
-    private BluetoothGatt gatt;
-    private List<BluetoothDevice> deviceList;
+    private Button btnScan;
+    private Button btnClear;
+    ArrayAdapter<BluetoothDevice> deviceAdapter;
     private ListView listView;
     private Context appContext;
-    private int REQUEST_ENABLE_BT;
-    private BluetoothGattService mAlarmService;
-    private BluetoothGattCharacteristic mAlarmChar;
-    private BluetoothGattDescriptor mAlarmWriteDescriptor;
-    private BluetoothGattDescriptor mAlarmReadDescriptor;
+    private BLEService mBLEService;
+    private int selectedItemPosition;
     private static final String TAG = "BLE_CENTRAL";
+    private boolean bAlarm;
+    private States state;
 
     private static final UUID alarmUUid = UUID.fromString("FF890198-9446-4E3A-B173-4E1161D6F59B");
     private static final UUID charUUid = UUID.fromString("77B4350C-DEA3-4DBA-B650-251670F4B2B4");
+
+    public enum States {
+        STANDARD,
+        SCANNING
+    }
+
+    private enum Klang
+    {
+        Ole
+    }
+
+    private SoundPool soundPool;
+    private int soundId[] = new int[Klang.values().length];
+    private final static int AUSGABE = AudioManager.STREAM_MUSIC;
+
+
+    // manage Service Lifecycle
+    private final ServiceConnection mServiceConnection = new ServiceConnection() {
+
+        @Override
+        public void onServiceConnected(ComponentName componentName, IBinder service) {
+            mBLEService = ((BLEService.LocalBinder) service).getService();
+            if (!mBLEService.initialize()) {
+                Log.e(TAG, "Unable to initialize Bluetooth");
+                finish();
+            }
+
+            deviceAdapter = new DeviceItemAdapter(appContext, mBLEService.getDeviceList());
+            listView.setAdapter(deviceAdapter);
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName componentName) {
+            mBLEService = null;
+        }
+    };
+
+    // Handles various events fired by the Service.
+    // ACTION_GATT_CONNECTED: connected to a GATT server.
+    // ACTION_GATT_DISCONNECTED: disconnected from a GATT server.
+    // ACTION_GATT_SERVICES_DISCOVERED: discovered GATT services.
+    // ACTION_DATA_AVAILABLE: received data from the device.  This can be a result of read
+    //                        or notification operations.
+    private final BroadcastReceiver mGattUpdateReceiver = new BroadcastReceiver() {
+
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            final String action = intent.getAction();
+            if (BLEService.ACTION_GATT_CONNECTED.equals(action)) {
+                ((DeviceItemAdapter)deviceAdapter).setState(DeviceItemAdapter.States.CONNECTED);
+                deviceAdapter.notifyDataSetChanged();
+                invalidateOptionsMenu();
+            } else if (BLEService.ACTION_GATT_DISCONNECTED.equals(action)) {
+                ((DeviceItemAdapter)deviceAdapter).setState(DeviceItemAdapter.States.STANDARD);
+                deviceAdapter.notifyDataSetChanged();
+                invalidateOptionsMenu();
+
+            } else if (BLEService.ACTION_GATT_SERVICES_DISCOVERED.equals(action)) {
+                // Show all the supported services and characteristics on the user interface.
+
+            } else if (BLEService.ACTION_ALARM_TRIGGERED.equals(action)) {
+
+                String alarmValue = intent.getStringExtra(BLEService.ALARM_VALUE);
+                if(alarmValue.equals("0")) {
+                    Log.i(TAG, "ALARM is 0");
+                    ((DeviceItemAdapter)deviceAdapter).setState(DeviceItemAdapter.States.CONNECTED);
+                    deviceAdapter.notifyDataSetChanged();
+                    invalidateOptionsMenu();
+                    bAlarm = false;
+                } else {
+                    Log.i(TAG, "ALARM is 1");
+                    ((DeviceItemAdapter)deviceAdapter).setState(DeviceItemAdapter.States.ALARM);
+                    deviceAdapter.notifyDataSetChanged();
+                    invalidateOptionsMenu();
+
+                    if(!bAlarm) {
+                        Klang klang;
+                        klang = Klang.Ole;
+
+                        if (soundId[klang.ordinal()] != -1)
+                        {
+                            final float volL = 1;
+                            final float volR = 1;
+                            final int prio = 0;
+                            final int n = 0;
+                            final float rate = 1;
+                            soundPool.play(soundId[klang.ordinal()], volL, volR, prio, n, rate);
+                        }
+                    }
+
+                    bAlarm = true;
+                }
+            } else if(BLEService.ACTION_DEVICE_FOUND.equals(action)) {
+                deviceAdapter.notifyDataSetChanged();
+            }
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -77,75 +172,89 @@ public class MainActivity extends Activity implements View.OnClickListener, Adap
         System.out.print("oncreate");
         Log.v(TAG, "onCreate");
         appContext = this;
-        listView = (ListView) findViewById(R.id.deviceList);
-        listView.setOnItemClickListener(this);
+        state = States.STANDARD;
 
-        btnStartScan = (Button) findViewById(R.id.btnStartScan);
-        btnStopScan = (Button) findViewById(R.id.btnStopScan);
-        btnSetAlarm = (Button) findViewById(R.id.btnSetAlarm);
-        btnClearAlarm = (Button) findViewById(R.id.btnClearAlarm);
-        btnGetAlarm = (Button) findViewById(R.id.btnGetAlarm);
-
-        btnStartScan.setOnClickListener(this);
-        btnStopScan.setOnClickListener(this);
-        btnSetAlarm.setOnClickListener(this);
-        btnClearAlarm.setOnClickListener(this);
-        btnGetAlarm.setOnClickListener(this);
-
-        filters = new ArrayList<ScanFilter>();
-        deviceList = new ArrayList<BluetoothDevice>();
+        btnScan = (Button) findViewById(R.id.btnScan);
+        btnClear = (Button) findViewById(R.id.btnClear);
+        btnScan.setOnClickListener(this);
+        btnClear.setOnClickListener(this);
 
         if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)) {
             Toast.makeText(this, "BLE not supported", Toast.LENGTH_SHORT).show();
             finish();
         }
 
-        btManager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+        Intent gattServiceIntent = new Intent(this, BLEService.class);
+        bindService(gattServiceIntent, mServiceConnection, BIND_AUTO_CREATE);
 
-        if(btManager == null) {
-            Toast.makeText(this, "Bluetooth not supported", Toast.LENGTH_SHORT).show();
-            finish();
+        listView = (ListView) findViewById(R.id.listView);
+        listView.setOnItemClickListener(this);
+
+        for (int i = 0; i < soundId.length; i++)
+        {
+            soundId[i] = -1;
         }
 
-        btAdapter = btManager.getAdapter();
-
-        if (btAdapter != null || !btAdapter.isEnabled()) {
-            Intent intent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
-            startActivityForResult(intent, REQUEST_ENABLE_BT);
-        }
-
+        setVolumeControlStream(AUSGABE);
+        bAlarm = false;
     }
 
     @Override
     public void onDestroy() {
-        deviceList.clear();
-        deviceList = null;
         super.onDestroy();
     }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+        registerReceiver(mGattUpdateReceiver, makeGattUpdateIntentFilter());
+        final int anzahlKanaele = 15;
+        soundPool = new SoundPool(anzahlKanaele, AUSGABE, 0);
+
+        try
+        {
+            AssetManager am = getAssets();
+            soundId[Klang.Ole.ordinal()] = soundPool.load(am.openFd("audio/Ole.wav"), 1);
+        }
+        catch (IOException e)
+        {
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        unregisterReceiver(mGattUpdateReceiver);
+        for (int i : soundId)
+        {
+            if (i != -1)
+            {
+                soundPool.unload(i);
+            }
+        }
+        soundPool.release();
+        soundPool = null;
+    }
 
     @Override
     public void onClick(View v) {
         switch(v.getId()) {
-            case R.id.btnStartScan:
+            case R.id.btnScan:
                 Log.d("StartScan", "buttonClicked");
-                scanForDevices(true);
+                if(state.equals(States.STANDARD)) {
+                    mBLEService.scanForDevices(true);
+                    btnScan.setText(R.string.scanStop);
+                    state = States.SCANNING;
+                } else if(state.equals(States.SCANNING)) {
+                    mBLEService.scanForDevices(false);
+                    btnScan.setText(R.string.scanStart);
+                    state = States.STANDARD;
+                }
                 break;
-            case R.id.btnStopScan:
+            case R.id.btnClear:
                 Log.d("StopScan", "buttonClicked");
-                scanForDevices(false);
-                break;
-            case R.id.btnSetAlarm:
-                Log.d("SetAlarm", "buttonClicked");
-                setAlarm(true);
-                break;
-            case R.id.btnClearAlarm:
-                Log.d("ClearAlarm", "buttonClicked");
-                setAlarm(false);
-                break;
-            case R.id.btnGetAlarm:
-                Log.d("ClearAlarm", "buttonClicked");
-                getAlarm();
+                mBLEService.clearList();
+                deviceAdapter.notifyDataSetChanged();
                 break;
             default:
         }
@@ -154,130 +263,35 @@ public class MainActivity extends Activity implements View.OnClickListener, Adap
 
     @Override
     public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
-        Log.i("OnItemClick", "item clicked");
-
-        BluetoothDevice selectedDevice = deviceList.get(position);
-        gatt = selectedDevice.connectGatt(MainActivity.this, false, gattCallback);
-        Log.i(TAG, "connecting to gatt");
+         Log.i("OnItemClick", "item clicked");
+        //RESET ALARM
+        // SET DEVICE ITEM LAYOUT TO CONNECTED
+       /* selectedItemPosition = position;
+        mBLEService.setAlarm(false, position);*/
     }
 
-
-    private void scanForDevices(final boolean enable) {
-        Log.v("ScanForDevices", "enter");
-        btScanner = btAdapter.getBluetoothLeScanner();
-        settings = new ScanSettings.Builder()
-                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-                .build();
-
-        filters = Arrays.asList(
-                new ScanFilter.Builder()
-                    .build());
-
-        if(enable) {
-            btScanner.startScan(filters, settings, scanCallback);
-        } else {
-            btScanner.stopScan(scanCallback);
-        }
-    }
-    
-    private ScanCallback scanCallback = new ScanCallback() {
-
-        @Override
-        public void onScanResult(int callbackType, ScanResult result) {
-            BluetoothDevice device = btAdapter.getRemoteDevice(result.getDevice().getAddress());
-
-            if(!deviceList.contains(device)) {
-                deviceList.add(device);
-            }
-
-            ArrayAdapter<BluetoothDevice> adapter = new ArrayAdapter<BluetoothDevice>(
-                    appContext,
-                    android.R.layout.simple_list_item_1,
-                    deviceList);
-            listView.setAdapter(adapter);
-        }
-
-        @Override
-        public void onBatchScanResults(List<ScanResult> results) {
-            for (ScanResult sr : results) {
-                Log.i("ScanResult - Results", sr.toString());
-            }
-        }
-
-        @Override
-        public void onScanFailed(int errorCode) {
-            Log.e("Scan Failed", "Error Code: " + errorCode);
-        }
-
-
-    };
-
-    private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
-        @Override
-        public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
-            Log.i("onConnectionStateChange", "Status: " + status);
-            switch(newState) {
-                case BluetoothProfile.STATE_CONNECTED:
-                    Log.i("gattCallback", "STATE_CONNECTED");
-                    btAdapter.getBluetoothLeScanner().stopScan(scanCallback);
-                    gatt.discoverServices();
-                    break;
-                case BluetoothProfile.STATE_DISCONNECTED:
-                    Log.i("gattCallback", "STATE_DISCONNECTED");
-                    break;
-                default:
-                    Log.i("gattCallback", "STATE_OTHER");
-            }
-        }
-
-        @Override
-        public void onServicesDiscovered(BluetoothGatt gatt, int status) {
-            if(status == BluetoothGatt.GATT_SUCCESS) {
-                //String value = "TEST_NEW_VALUE";
-
-                List<BluetoothGattService> services = gatt.getServices();
-                mAlarmService = gatt.getService(alarmUUid);
-                mAlarmChar = mAlarmService.getCharacteristic(charUUid);
-
-                Log.i(TAG, "alarmCharacteristic Value: " + mAlarmChar.getValue());
-                Log.i("Service discovered", gatt.getServices().toString());
-
-
-                // See Whatsapp
-                // Write via GattDescriptor
-            }
-        }
-
-        @Override
-        public void onCharacteristicRead(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
-            Log.i("onCharacteristicRead", characteristic.getValue().toString());
-        }
-    };
-
-    public void setAlarm(boolean b) {
-        byte[] value = new byte[4];
-
-        if(b) {
-            value[0] = (byte) (01 & 0xFF);
-        } else {
-            value[0] = (byte) (00 & 0xFF);
-        }
-
-        mAlarmChar.setValue(value);
-        boolean stat = gatt.writeCharacteristic(mAlarmChar);
-
-        if(stat) {
-            Log.i("WriteCharStatus", "true");
-        } else {
-            Log.i("WriteCharStatus", "false");
-        }
+    private static IntentFilter makeGattUpdateIntentFilter() {
+        final IntentFilter intentFilter = new IntentFilter();
+        intentFilter.addAction(BLEService.ACTION_GATT_CONNECTED);
+        intentFilter.addAction(BLEService.ACTION_GATT_DISCONNECTED);
+        intentFilter.addAction(BLEService.ACTION_GATT_SERVICES_DISCOVERED);
+        intentFilter.addAction(BLEService.ACTION_ALARM_TRIGGERED);
+        intentFilter.addAction(BLEService.ACTION_DEVICE_FOUND);
+        intentFilter.addAction(DeviceItemAdapter.ACTION_CONNECT_CLICKED);
+        return intentFilter;
     }
 
-    public void getAlarm() {
-
-        byte[] value = mAlarmChar.getValue();
-        Log.i("getAlarm(): ", "value" + value.toString());
-        Toast.makeText(this, "getAlarm Value" + value, Toast.LENGTH_LONG).show();
+    public void connectDevice(int position) {
+        Log.i(TAG, "connect Button clicked " + position);
+        selectedItemPosition = position;
+        mBLEService.connectGatt(position);
     }
 
+    public void disconnectDevice(int position) {
+        Log.i(TAG, "disconnect Button clicked " + position);
+        selectedItemPosition = position;
+        mBLEService.disconnectGatt(position);
+        deviceAdapter.notifyDataSetChanged();
+        bAlarm = false;
+    }
 }

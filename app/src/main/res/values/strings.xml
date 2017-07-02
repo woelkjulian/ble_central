@@ -1,3 +1,8 @@
 <resources>
     <string name="app_name">BLE_Central</string>
+    <string name="scanStart">Scan</string>
+    <string name="scanStop">Stop</string>
+    <string name="connect">Connect</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="clear">Clear</string>
 </resources>
